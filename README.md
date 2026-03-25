@@ -1,88 +1,115 @@
-# GL.iNet Radio Timer
+# ⏱ GL.iNet Radio Timer
 
-Interactive OpenWrt/GL.iNet shell scripts to schedule Wi-Fi shutoff at a user-selected time, with optional cellular handling on modem-equipped models and an optional automatic turn-back-on time.
+> Simple Wi-Fi and optional cellular timer automation for GL.iNet / OpenWrt
 
-## Files
+---
 
-- `files/etc/init.d/radio-timer` - procd service that watches the timer.
-- `files/usr/bin/radio-timer` - command interface for setting/checking/changing the timer.
-- `files/etc/config/radio-timer` - UCI config used by the service.
+## 🚀 Features
 
-## Install on a GL.iNet router
+- 🕒 Interactive timer setup
+- 📶 Scheduled Wi-Fi shutoff
+- 📡 Optional cellular shutoff on modem-equipped models
+- 🔁 Optional automatic turn-back-on time
+- 📋 Service status and timer status commands
+- 🧠 Works on Wi-Fi-only and Wi-Fi + cellular GL.iNet models
+- ⚙️ OpenWrt `procd` service with persistent config
+- 🚀 One-line install from GitHub
 
-One-line install:
+---
 
-```sh
+## ⚙️ What It Does
+
+The script can:
+
+- Turn off Wi-Fi at a user-selected time
+- Turn off detected cellular interfaces at the same time when present
+- Optionally turn Wi-Fi and cellular back on at a second time
+- Keep the timer running as a service across restarts
+- Show current timer state, remaining time, and last action
+
+---
+
+## 📦 Installation
+
+```bash
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/zippyy/GL.iNet-WiFi-Cellular-Timer/main/install.sh)"
 ```
 
-Manual copy/install:
+---
 
-```sh
-scp files/usr/bin/radio-timer root@ROUTER:/usr/bin/radio-timer
-scp files/etc/init.d/radio-timer root@ROUTER:/etc/init.d/radio-timer
-scp files/etc/config/radio-timer root@ROUTER:/etc/config/radio-timer
-ssh root@ROUTER "chmod +x /usr/bin/radio-timer /etc/init.d/radio-timer && /etc/init.d/radio-timer enable && /etc/init.d/radio-timer start"
-```
+## 🧰 Commands
 
-## Usage
+Interactive setup:
 
-Interactive mode:
-
-```sh
+```bash
 radio-timer interactive
 ```
 
-Set only the shutoff time directly:
+Set only the shutoff time:
 
-```sh
+```bash
 radio-timer set 23:15
 ```
 
 Set shutoff and automatic turn-back-on:
 
-```sh
+```bash
 radio-timer set 23:15 06:30
 ```
 
-Check current status:
+Check status:
 
-```sh
+```bash
 radio-timer status
 ```
 
 Clear the timer:
 
-```sh
+```bash
 radio-timer clear
 ```
 
-Force the shutoff action immediately:
+Force shutoff immediately:
 
-```sh
+```bash
 radio-timer run-now
 ```
 
-Force the turn-back-on action immediately:
+Force turn-back-on immediately:
 
-```sh
+```bash
 radio-timer run-enable-now
 ```
 
 Service control:
 
-```sh
+```bash
 /etc/init.d/radio-timer status
 /etc/init.d/radio-timer restart
 ```
 
-## Notes
+---
 
-- Times are interpreted using the router's local timezone.
-- If the entered off time has already passed today, the timer rolls forward to tomorrow.
-- If an on time is earlier than or equal to the off time, it rolls forward to the next day after the shutoff time.
-- On Wi-Fi-only GL.iNet models, the script still works and simply skips cellular actions.
-- Wi-Fi is disabled with `wifi down`.
-- Wi-Fi is enabled with `wifi up`.
-- Cellular interfaces are detected from `uci show network` and brought down with `ifdown`.
-- The same detected cellular interfaces are brought back up with `ifup`.
+## 🧩 Behavior
+
+- If the off time has already passed today, it rolls to tomorrow
+- If the on time is earlier than or equal to the off time, it rolls to the next day after shutoff
+- On Wi-Fi-only models, the script skips cellular actions automatically
+- Wi-Fi is controlled with `wifi down` and `wifi up`
+- Cellular interfaces are detected from `uci show network`
+
+---
+
+## 📁 Installed Files
+
+- `/usr/bin/radio-timer`
+- `/etc/init.d/radio-timer`
+- `/etc/config/radio-timer`
+
+---
+
+## 📝 Notes
+
+- Times use the router's local timezone
+- Existing `/etc/config/radio-timer` is preserved by the installer
+- The service is enabled automatically during install
