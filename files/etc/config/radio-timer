@@ -1,0 +1,8 @@
+config timer 'main'
+	option enabled '0'
+	option off_epoch '0'
+	option off_text ''
+	option on_enabled '0'
+	option on_epoch '0'
+	option on_text ''
+	option last_action ''

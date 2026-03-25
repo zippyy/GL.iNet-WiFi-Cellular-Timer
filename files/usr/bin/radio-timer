@@ -1,0 +1,381 @@
+#!/bin/sh
+
+CONFIG_NAME="main"
+SERVICE_NAME="radio-timer"
+STATE_DIR="/var/run/${SERVICE_NAME}"
+LOCK_DIR="${STATE_DIR}.lock"
+
+mkdir -p "$STATE_DIR"
+
+usage() {
+	cat <<'EOF'
+Usage:
+  radio-timer interactive
+  radio-timer set OFF_HH:MM [ON_HH:MM]
+  radio-timer status
+  radio-timer clear
+  radio-timer run-now
+  radio-timer run-enable-now
+  radio-timer daemon
+  radio-timer service restart
+EOF
+}
+
+config_get_value() {
+	uci -q get "${SERVICE_NAME}.${CONFIG_NAME}.$1"
+}
+
+config_set_value() {
+	uci -q set "${SERVICE_NAME}.${CONFIG_NAME}.$1=$2"
+}
+
+save_config() {
+	uci -q commit "$SERVICE_NAME"
+}
+
+acquire_lock() {
+	local i=0
+	while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+		i=$((i + 1))
+		[ "$i" -ge 50 ] && return 1
+		sleep 0.1
+	done
+	trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT INT TERM
+	return 0
+}
+
+release_lock() {
+	rmdir "$LOCK_DIR" 2>/dev/null
+	trap - EXIT INT TERM
+}
+
+validate_hhmm() {
+	echo "$1" | grep -Eq '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+}
+
+target_epoch_from_hhmm() {
+	local hhmm="$1"
+	local base_epoch="${2:-}"
+	local today target now
+
+	if [ -n "$base_epoch" ] && [ "$base_epoch" -gt 0 ] 2>/dev/null; then
+		today="$(date -d "@$base_epoch" '+%Y-%m-%d')"
+		target="$(date -D '%Y-%m-%d %H:%M:%S' -d "${today} ${hhmm}:00" '+%s' 2>/dev/null)" || return 1
+		if [ "$target" -le "$base_epoch" ]; then
+			target=$((target + 86400))
+		fi
+	else
+		today="$(date '+%Y-%m-%d')"
+		target="$(date -D '%Y-%m-%d %H:%M:%S' -d "${today} ${hhmm}:00" '+%s' 2>/dev/null)" || return 1
+		now="$(date '+%s')"
+
+		if [ "$target" -le "$now" ]; then
+			target=$((target + 86400))
+		fi
+	fi
+
+	echo "$target"
+}
+
+format_epoch() {
+	date -d "@$1" '+%Y-%m-%d %H:%M:%S %Z'
+}
+
+set_timer() {
+	local off_hhmm="$1"
+	local on_hhmm="$2"
+	local off_epoch on_epoch
+
+	validate_hhmm "$off_hhmm" || {
+		echo "Invalid off time. Use HH:MM in 24-hour format."
+		return 1
+	}
+
+	off_epoch="$(target_epoch_from_hhmm "$off_hhmm")" || {
+		echo "Failed to calculate off time."
+		return 1
+	}
+
+	if [ -n "$on_hhmm" ]; then
+		validate_hhmm "$on_hhmm" || {
+			echo "Invalid on time. Use HH:MM in 24-hour format."
+			return 1
+		}
+
+		on_epoch="$(target_epoch_from_hhmm "$on_hhmm" "$off_epoch")" || {
+			echo "Failed to calculate on time."
+			return 1
+		}
+	fi
+
+	acquire_lock || {
+		echo "Failed to acquire timer lock."
+		return 1
+	}
+
+	config_set_value enabled "'1'"
+	config_set_value off_epoch "'$off_epoch'"
+	config_set_value off_text "'$(format_epoch "$off_epoch")'"
+	if [ -n "$on_epoch" ]; then
+		config_set_value on_enabled "'1'"
+		config_set_value on_epoch "'$on_epoch'"
+		config_set_value on_text "'$(format_epoch "$on_epoch")'"
+	else
+		config_set_value on_enabled "'0'"
+		config_set_value on_epoch "'0'"
+		config_set_value on_text "''"
+	fi
+	save_config
+	release_lock
+
+	echo "Off timer set for $(format_epoch "$off_epoch")"
+	if [ -n "$on_epoch" ]; then
+		echo "On timer set for $(format_epoch "$on_epoch")"
+	fi
+	/etc/init.d/"$SERVICE_NAME" restart >/dev/null 2>&1
+}
+
+clear_timer() {
+	acquire_lock || {
+		echo "Failed to acquire timer lock."
+		return 1
+	}
+
+	config_set_value enabled "'0'"
+	config_set_value off_epoch "'0'"
+	config_set_value off_text "''"
+	config_set_value on_enabled "'0'"
+	config_set_value on_epoch "'0'"
+	config_set_value on_text "''"
+	save_config
+	release_lock
+
+	echo "Timer cleared."
+	/etc/init.d/"$SERVICE_NAME" restart >/dev/null 2>&1
+}
+
+discover_cellular_ifaces() {
+	local line network iface proto ifname seen
+
+	uci -q show network | while IFS= read -r line; do
+		case "$line" in
+			network.*=interface)
+				network="${line#network.}"
+				network="${network%=interface}"
+				iface=""
+				proto=""
+				ifname=""
+				;;
+			network.*.proto=*)
+				proto="${line#*=}"
+				proto="${proto#\'}"
+				proto="${proto%\'}"
+				case "$proto" in
+					3g|4g|5g|ncm|qmi|mbim|modemmanager|rmnet|wwan|lte)
+						iface="$network"
+						;;
+				esac
+				;;
+			network.*.ifname=*|network.*.device=*)
+				ifname="${line#*=}"
+				ifname="${ifname#\'}"
+				ifname="${ifname%\'}"
+				case "$ifname" in
+					*wwan*|*cdc-wdm*|*usb*modem*|*rmnet*)
+						iface="$network"
+						;;
+				esac
+				;;
+		esac
+
+		if [ -n "$iface" ] && ! echo "$seen" | grep -Fq "|$iface|"; then
+			echo "$iface"
+			seen="${seen}|${iface}|"
+		fi
+	done
+}
+
+run_shutdown() {
+	local ifaces iface
+
+	logger -t "$SERVICE_NAME" "Timer reached. Disabling Wi-Fi and cellular."
+
+	wifi down >/dev/null 2>&1
+
+	ifaces="$(discover_cellular_ifaces)"
+	for iface in $ifaces; do
+		ifdown "$iface" >/dev/null 2>&1
+	done
+
+	acquire_lock || return 1
+	config_set_value enabled "'0'"
+	config_set_value off_epoch "'0'"
+	config_set_value off_text "''"
+	config_set_value last_action "'$(date '+%Y-%m-%d %H:%M:%S %Z')'"
+	save_config
+	release_lock
+
+	echo "Wi-Fi and detected cellular interfaces were turned off."
+}
+
+run_enable() {
+	local ifaces iface
+
+	logger -t "$SERVICE_NAME" "Enable timer reached. Enabling Wi-Fi and cellular."
+
+	wifi up >/dev/null 2>&1
+
+	ifaces="$(discover_cellular_ifaces)"
+	for iface in $ifaces; do
+		ifup "$iface" >/dev/null 2>&1
+	done
+
+	acquire_lock || return 1
+	config_set_value on_enabled "'0'"
+	config_set_value on_epoch "'0'"
+	config_set_value on_text "''"
+	config_set_value last_action "'$(date '+%Y-%m-%d %H:%M:%S %Z')'"
+	save_config
+	release_lock
+
+	echo "Wi-Fi and detected cellular interfaces were turned on."
+}
+
+daemon_cmd() {
+	local enabled off_epoch on_enabled on_epoch now
+
+	while true; do
+		enabled="$(config_get_value enabled)"
+		off_epoch="$(config_get_value off_epoch)"
+		on_enabled="$(config_get_value on_enabled)"
+		on_epoch="$(config_get_value on_epoch)"
+		now="$(date '+%s')"
+
+		if [ "$enabled" = "1" ] && [ -n "$off_epoch" ] && [ "$off_epoch" -gt 0 ] 2>/dev/null; then
+			if [ "$now" -ge "$off_epoch" ]; then
+				run_shutdown
+			fi
+		fi
+
+		if [ "$on_enabled" = "1" ] && [ -n "$on_epoch" ] && [ "$on_epoch" -gt 0 ] 2>/dev/null; then
+			if [ "$now" -ge "$on_epoch" ]; then
+				run_enable
+			fi
+		fi
+
+		sleep 20
+	done
+}
+
+status_cmd() {
+	local enabled off_epoch off_text on_enabled on_epoch on_text now remaining last_action
+
+	enabled="$(config_get_value enabled)"
+	off_epoch="$(config_get_value off_epoch)"
+	off_text="$(config_get_value off_text)"
+	on_enabled="$(config_get_value on_enabled)"
+	on_epoch="$(config_get_value on_epoch)"
+	on_text="$(config_get_value on_text)"
+	last_action="$(config_get_value last_action)"
+
+	echo "Service: $(/etc/init.d/$SERVICE_NAME enabled >/dev/null 2>&1 && echo enabled || echo disabled)"
+	if /etc/init.d/"$SERVICE_NAME" running >/dev/null 2>&1; then
+		echo "Daemon: running"
+	else
+		echo "Daemon: stopped"
+	fi
+
+	if [ "$enabled" = "1" ] && [ -n "$off_epoch" ] && [ "$off_epoch" -gt 0 ] 2>/dev/null; then
+		now="$(date '+%s')"
+		remaining=$((off_epoch - now))
+		if [ "$remaining" -lt 0 ]; then
+			remaining=0
+		fi
+		echo "Off timer: set"
+		echo "Off target: ${off_text:-$(format_epoch "$off_epoch")}"
+		echo "Off remaining: ${remaining} seconds"
+	else
+		echo "Off timer: not set"
+	fi
+
+	if [ "$on_enabled" = "1" ] && [ -n "$on_epoch" ] && [ "$on_epoch" -gt 0 ] 2>/dev/null; then
+		now="$(date '+%s')"
+		remaining=$((on_epoch - now))
+		if [ "$remaining" -lt 0 ]; then
+			remaining=0
+		fi
+		echo "On timer: set"
+		echo "On target: ${on_text:-$(format_epoch "$on_epoch")}"
+		echo "On remaining: ${remaining} seconds"
+	else
+		echo "On timer: not set"
+	fi
+
+	[ -n "$last_action" ] && echo "Last action: $last_action"
+}
+
+interactive_cmd() {
+	local off_hhmm on_choice on_hhmm
+
+	echo "Enter the time to disable Wi-Fi and cellular (HH:MM, 24-hour clock)."
+	printf "> "
+	read -r off_hhmm || return 1
+
+	echo "Turn Wi-Fi and cellular back on automatically? (y/N)"
+	printf "> "
+	read -r on_choice || return 1
+
+	case "$on_choice" in
+		y|Y|yes|YES)
+			echo "Enter the time to turn Wi-Fi and cellular back on (HH:MM, 24-hour clock)."
+			printf "> "
+			read -r on_hhmm || return 1
+			;;
+	esac
+
+	set_timer "$off_hhmm" "$on_hhmm"
+}
+
+service_cmd() {
+	shift
+	/etc/init.d/"$SERVICE_NAME" "$@"
+}
+
+case "$1" in
+	interactive)
+		interactive_cmd
+		;;
+	set)
+		[ -n "$2" ] || {
+			usage
+			exit 1
+		}
+		set_timer "$2" "$3"
+		;;
+	status)
+		status_cmd
+		;;
+	clear)
+		clear_timer
+		;;
+	run-now)
+		run_shutdown
+		;;
+	run-enable-now)
+		run_enable
+		;;
+	daemon)
+		daemon_cmd
+		;;
+	service)
+		[ -n "$2" ] || {
+			usage
+			exit 1
+		}
+		service_cmd "$@"
+		;;
+	*)
+		usage
+		exit 1
+		;;
+esac

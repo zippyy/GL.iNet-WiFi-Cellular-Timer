@@ -1,0 +1,27 @@
+#!/bin/sh /etc/rc.common
+
+START=95
+USE_PROCD=1
+SERVICE_NAME="radio-timer"
+
+start_service() {
+	procd_open_instance
+	procd_set_param command /bin/sh /usr/bin/radio-timer daemon
+	procd_set_param respawn 3600 5 5
+	procd_close_instance
+}
+
+stop_service() {
+	return 0
+}
+
+status_service() {
+	/usr/bin/radio-timer status
+}
+
+extra_command "status" "Show service and timer status"
+extra_command "timer" "Open interactive timer prompt"
+
+timer() {
+	/usr/bin/radio-timer interactive
+}
