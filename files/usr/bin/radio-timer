@@ -195,14 +195,26 @@ discover_cellular_ifaces() {
 	done
 }
 
+has_cellular_targets() {
+	local ifaces
+
+	ifaces="$(discover_cellular_ifaces)"
+	[ -n "$ifaces" ]
+}
+
 run_shutdown() {
 	local ifaces iface
 
-	logger -t "$SERVICE_NAME" "Timer reached. Disabling Wi-Fi and cellular."
+	ifaces="$(discover_cellular_ifaces)"
+
+	if [ -n "$ifaces" ]; then
+		logger -t "$SERVICE_NAME" "Timer reached. Disabling Wi-Fi and detected cellular interfaces."
+	else
+		logger -t "$SERVICE_NAME" "Timer reached. Disabling Wi-Fi. No cellular interfaces detected."
+	fi
 
 	wifi down >/dev/null 2>&1
 
-	ifaces="$(discover_cellular_ifaces)"
 	for iface in $ifaces; do
 		ifdown "$iface" >/dev/null 2>&1
 	done
@@ -215,17 +227,26 @@ run_shutdown() {
 	save_config
 	release_lock
 
-	echo "Wi-Fi and detected cellular interfaces were turned off."
+	if [ -n "$ifaces" ]; then
+		echo "Wi-Fi and detected cellular interfaces were turned off."
+	else
+		echo "Wi-Fi was turned off. No cellular interfaces were detected."
+	fi
 }
 
 run_enable() {
 	local ifaces iface
 
-	logger -t "$SERVICE_NAME" "Enable timer reached. Enabling Wi-Fi and cellular."
+	ifaces="$(discover_cellular_ifaces)"
+
+	if [ -n "$ifaces" ]; then
+		logger -t "$SERVICE_NAME" "Enable timer reached. Enabling Wi-Fi and detected cellular interfaces."
+	else
+		logger -t "$SERVICE_NAME" "Enable timer reached. Enabling Wi-Fi. No cellular interfaces detected."
+	fi
 
 	wifi up >/dev/null 2>&1
 
-	ifaces="$(discover_cellular_ifaces)"
 	for iface in $ifaces; do
 		ifup "$iface" >/dev/null 2>&1
 	done
@@ -238,7 +259,11 @@ run_enable() {
 	save_config
 	release_lock
 
-	echo "Wi-Fi and detected cellular interfaces were turned on."
+	if [ -n "$ifaces" ]; then
+		echo "Wi-Fi and detected cellular interfaces were turned on."
+	else
+		echo "Wi-Fi was turned on. No cellular interfaces were detected."
+	fi
 }
 
 daemon_cmd() {
@@ -283,6 +308,12 @@ status_cmd() {
 		echo "Daemon: running"
 	else
 		echo "Daemon: stopped"
+	fi
+
+	if has_cellular_targets; then
+		echo "Cellular support: detected"
+	else
+		echo "Cellular support: not detected (Wi-Fi-only operation is fine)"
 	fi
 
 	if [ "$enabled" = "1" ] && [ -n "$off_epoch" ] && [ "$off_epoch" -gt 0 ] 2>/dev/null; then

@@ -1,6 +1,6 @@
 # GL.iNet Radio Timer
 
-Interactive OpenWrt/GL.iNet shell scripts to schedule Wi-Fi and cellular shutoff at a user-selected time, with an optional automatic turn-back-on time.
+Interactive OpenWrt/GL.iNet shell scripts to schedule Wi-Fi shutoff at a user-selected time, with optional cellular handling on modem-equipped models and an optional automatic turn-back-on time.
 
 ## Files
 
@@ -10,7 +10,13 @@ Interactive OpenWrt/GL.iNet shell scripts to schedule Wi-Fi and cellular shutoff
 
 ## Install on a GL.iNet router
 
-Copy the files to the router:
+One-line install:
+
+```sh
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/zippyy/GL.iNet-WiFi-Cellular-Timer/main/install.sh)"
+```
+
+Manual copy/install:
 
 ```sh
 scp files/usr/bin/radio-timer root@ROUTER:/usr/bin/radio-timer
@@ -75,6 +81,7 @@ Service control:
 - Times are interpreted using the router's local timezone.
 - If the entered off time has already passed today, the timer rolls forward to tomorrow.
 - If an on time is earlier than or equal to the off time, it rolls forward to the next day after the shutoff time.
+- On Wi-Fi-only GL.iNet models, the script still works and simply skips cellular actions.
 - Wi-Fi is disabled with `wifi down`.
 - Wi-Fi is enabled with `wifi up`.
 - Cellular interfaces are detected from `uci show network` and brought down with `ifdown`.
